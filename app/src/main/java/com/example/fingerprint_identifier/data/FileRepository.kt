@@ -33,4 +33,30 @@ class FileRepository(private val context: Context) {
             contentValues
         ).build()
     }
+
+    fun saveBitmapAndGetUri(bitmap: android.graphics.Bitmap, captureName: String): android.net.Uri {
+        val timeStamp = nameDateFormat.format(System.currentTimeMillis())
+        val fileName = "${captureName}_$timeStamp.jpg"
+
+        val contentValues = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+            put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.MediaColumns.RELATIVE_PATH, "Pictures/Finger Data")
+            }
+        }
+
+        val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+        uri?.let {
+            val outputStream = context.contentResolver.openOutputStream(it)
+            outputStream?.use { stream ->
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 100, stream)
+            }
+        }
+        return uri!!
+    }
+
+    fun deleteFile(uri: android.net.Uri) {
+        context.contentResolver.delete(uri, null, null)
+    }
 } 

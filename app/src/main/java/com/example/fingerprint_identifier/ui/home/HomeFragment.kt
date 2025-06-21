@@ -34,6 +34,18 @@ class HomeFragment : BaseFragment() {
                 .addToBackStack(null)
                 .commit()
         }
+
+        binding.verifyButton.setOnClickListener {
+            val cameraFragment = CameraFragment().apply {
+                arguments = Bundle().apply {
+                    putBoolean("IS_VERIFICATION_MODE", true)
+                }
+            }
+            parentFragmentManager.beginTransaction()
+                .replace(R.id.fragment_container, cameraFragment)
+                .addToBackStack(null)
+                .commit()
+        }
     }
 
     override fun onDestroyView() {

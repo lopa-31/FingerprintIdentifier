@@ -44,6 +44,24 @@ class OverlayView @JvmOverloads constructor(
         postInvalidate() // Redraw the view
     }
 
+    fun getOverlayRect(): RectF? {
+        return when (mode) {
+            OverlayMode.PALM_SQUARE -> {
+                val centerX = width / 2f
+                val centerY = height / 2f
+                val sideLength = width * 0.8f
+                val halfSide = sideLength / 2f
+                RectF(centerX - halfSide, centerY - halfSide, centerX + halfSide, centerY + halfSide)
+            }
+            OverlayMode.FINGER_OVAL -> {
+                val centerX = width / 2f
+                val centerY = height / 2f
+                RectF(centerX - 150, centerY - 250, centerX + 150, centerY + 250)
+            }
+            OverlayMode.NONE -> null
+        }
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         // Draw the semi-transparent background

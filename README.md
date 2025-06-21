@@ -34,7 +34,7 @@ This is a native Android application that uses the device's camera to perform re
 4.  **Run the application:**
     - Connect your Android device or start an emulator.
     - Click the 'Run' button (▶️) in Android Studio.
-    - The app will request **Camera** and **Storage** permissions at runtime. Please grant them to use the app.
+    - The app will request **Camera** permissions at runtime. Please grant them to use the app.
 
 The project includes the required MediaPipe model (`hand_landmarker.task`) in the `app/src/main/assets` directory, so no additional setup is needed for the ML model.
 

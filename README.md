@@ -23,7 +23,7 @@ This is a native Android application that uses the device's camera to perform re
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/your-username/FingerprintIdentifier.git
+    git clone https://github.com/lopa-31/FingerprintIdentifier.git
     ```
 2.  **Open in Android Studio:**
     - Open Android Studio.

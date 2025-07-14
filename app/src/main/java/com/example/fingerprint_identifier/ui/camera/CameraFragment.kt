@@ -47,11 +47,14 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.max
 import kotlin.math.min
 import androidx.exifinterface.media.ExifInterface
+import com.example.fingerprint_identifier.R
 
 class CameraFragment : BaseFragment() {
 
     private var _binding: FragmentCameraBinding? = null
     private val binding get() = _binding!!
+
+    private lateinit var infoSheet: InfoBottomSheetView
 
     private val cameraViewModel: CameraViewModel by viewModels()
 
@@ -84,6 +87,21 @@ class CameraFragment : BaseFragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+
+        infoSheet = view.findViewById(R.id.info_bottom_sheet)
+
+        // --- Example Usage ---
+
+        // Simulate a "Liveness Check" warning showing after 3 seconds
+        infoSheet.postDelayed({
+            showLivenessCheckWarning()
+        }, 3000)
+
+        // Simulate the warning going away after 8 seconds
+        infoSheet.postDelayed({
+            hideWarning()
+        }, 8000)
+
         cameraExecutor = Executors.newSingleThreadExecutor()
         handAnalyzer = HandAnalyzer(requireContext(), cameraViewModel)
 
@@ -119,6 +137,28 @@ class CameraFragment : BaseFragment() {
         }
 
         observeViewModel()
+    }
+
+    private fun showLivenessCheckWarning() {
+        infoSheet.updateContent(
+            title = "Liveness Check",
+            description = "Stay still and look at the camera. We're verifying that you're present and real.",
+            imageRes = R.drawable.ic_launcher_background // Use your actual drawable
+        )
+        infoSheet.show()
+    }
+
+    private fun showNoFaceWarning() {
+        infoSheet.updateContent(
+            title = "Face Not Detected",
+            description = "Please make sure your face is clearly visible within the frame.",
+            imageRes = R.drawable.ic_launcher_foreground // Another drawable
+        )
+        infoSheet.show()
+    }
+
+    private fun hideWarning() {
+        infoSheet.hide()
     }
 
     private fun observeViewModel() {

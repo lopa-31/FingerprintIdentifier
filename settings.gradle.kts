@@ -23,3 +23,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "FingerprintIdentifier"
 include(":app")
+include(":security")

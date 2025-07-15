@@ -12,6 +12,7 @@ import com.example.fingerprint_identifier.R
 import com.example.fingerprint_identifier.databinding.FragmentHomeBinding
 import com.example.fingerprint_identifier.ui.base.BaseFragment
 import com.example.fingerprint_identifier.ui.camera.CameraFragment
+import com.example.fingerprint_identifier.ui.camera.Camera2Fragment
 
 class HomeFragment : BaseFragment() {
 
@@ -43,6 +44,13 @@ class HomeFragment : BaseFragment() {
             }
             parentFragmentManager.beginTransaction()
                 .replace(R.id.fragment_container, cameraFragment)
+                .addToBackStack(null)
+                .commit()
+        }
+
+        binding.camera2Button.setOnClickListener {
+            parentFragmentManager.beginTransaction()
+                .replace(R.id.fragment_container, Camera2Fragment())
                 .addToBackStack(null)
                 .commit()
         }

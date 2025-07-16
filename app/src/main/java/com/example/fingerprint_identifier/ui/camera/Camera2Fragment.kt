@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
@@ -23,8 +24,14 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
+import androidx.fragment.app.viewModels
+import androidx.lifecycle.lifecycleScope
+import com.example.fingerprint_identifier.R
 import com.example.fingerprint_identifier.databinding.FragmentCamera2Binding
 import com.example.fingerprint_identifier.ui.base.BaseFragment
+import com.example.fingerprint_identifier.analyzer.ImageProcessor
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collectLatest
 import java.util.concurrent.Executors
 import kotlin.math.pow
 import kotlin.math.sqrt
@@ -52,6 +59,16 @@ class Camera2Fragment : BaseFragment() {
     private var minimumFocusDistance: Float = 0f
     private var hyperfocalDistance: Float = 0f
     
+    // UI components
+    private lateinit var biometricOverlay: BiometricOverlayView
+    private lateinit var infoBottomSheet: InfoBottomSheetView
+    
+    // ViewModel
+    private val camera2ViewModel: Camera2ViewModel by viewModels()
+    
+    // Image processor
+    private lateinit var imageProcessor: ImageProcessor
+    
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
@@ -76,9 +93,23 @@ class Camera2Fragment : BaseFragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
         
+        // Initialize UI components
+        biometricOverlay = binding.biometricOverlay
+        infoBottomSheet = binding.infoBottomSheet
+        
+        // Initialize image processor
+        imageProcessor = ImageProcessor(camera2ViewModel, viewLifecycleOwner.lifecycleScope)
+        
         cameraManager = requireContext().getSystemService(Context.CAMERA_SERVICE) as CameraManager
         setupCameraInfo()
+        setupClickListeners()
+        observeViewModel()
         
+        // Set initial state
+        camera2ViewModel.setInitialState()
+    }
+
+    private fun setupClickListeners() {
         binding.captureButton.setOnClickListener {
             capturePhoto()
         }
@@ -86,6 +117,139 @@ class Camera2Fragment : BaseFragment() {
         // Trigger autofocus when TextureView is tapped
         binding.textureView.setOnClickListener {
             triggerAutoFocus()
+        }
+        
+        // State test buttons
+        binding.btnInitial.setOnClickListener {
+            camera2ViewModel.setInitialState()
+        }
+        
+        binding.btnValidating.setOnClickListener {
+            camera2ViewModel.setValidatingState()
+        }
+        
+        binding.btnSuccess.setOnClickListener {
+            camera2ViewModel.setSuccessState()
+        }
+        
+        binding.btnFailure.setOnClickListener {
+            camera2ViewModel.setFailureState()
+        }
+        
+        // Warning management buttons
+        binding.btnAddWarning.setOnClickListener {
+            addRandomWarning()
+        }
+        
+        binding.btnClearWarning.setOnClickListener {
+            camera2ViewModel.clearCurrentWarning()
+        }
+        
+        binding.btnClearAll.setOnClickListener {
+            camera2ViewModel.clearAllWarnings()
+            imageProcessor.clearBuffer()
+        }
+        
+        // Add clear buffer button functionality
+        binding.btnClearWarning.setOnClickListener {
+            camera2ViewModel.clearCurrentWarning()
+            // Also clear buffer to restart process
+            imageProcessor.clearBuffer()
+        }
+    }
+    
+    private fun addRandomWarning() {
+        val warnings = listOf(
+            Triple("Hold Still", "Please keep your finger steady on the sensor.", R.drawable.ic_launcher_foreground),
+            Triple("Move Closer", "Please move your finger closer to the sensor.", R.drawable.ic_launcher_background),
+            Triple("Improve Lighting", "Please ensure adequate lighting for better capture.", R.drawable.ic_launcher_foreground),
+            Triple("Clean Sensor", "Please clean the sensor surface for optimal scanning.", R.drawable.ic_launcher_background),
+            Triple("Finger Position", "Please center your finger on the sensor.", R.drawable.ic_launcher_foreground),
+            Triple("Pressure Warning", "Please apply gentle pressure on the sensor.", R.drawable.ic_launcher_background),
+            Triple("Too Fast", "Please slow down your finger movement.", R.drawable.ic_launcher_foreground),
+            Triple("Wet Finger", "Please dry your finger before scanning.", R.drawable.ic_launcher_background)
+        )
+        
+        val randomWarning = warnings.random()
+        camera2ViewModel.addWarning(randomWarning.first, randomWarning.second, randomWarning.third)
+    }
+    
+    private fun observeViewModel() {
+        viewLifecycleOwner.lifecycleScope.launch {
+            camera2ViewModel.camera2State.collectLatest { state ->
+                updateUIForState(state)
+            }
+        }
+    }
+    
+    private fun updateUIForState(state: Camera2State) {
+        when (state) {
+            is Camera2State.Initial -> {
+                // White, Dashed, No animation, Bottom sheet hidden
+                biometricOverlay.setColor(Color.WHITE)
+                biometricOverlay.setStyle(BiometricOverlayView.OverlayStyle.DASHED)
+                biometricOverlay.setAnimationEnabled(false)
+                infoBottomSheet.hide()
+                binding.statusText.text = "Camera2 Preview - Initial (${getBufferSize()}/3 images)"
+                Log.d("Camera2Fragment", "State: Initial")
+            }
+            
+            is Camera2State.Validating -> {
+                // Amber, Dashed, With animation, Bottom sheet hidden
+                biometricOverlay.setColor(Color.parseColor("#FFC107")) // Amber
+                biometricOverlay.setStyle(BiometricOverlayView.OverlayStyle.DASHED)
+                biometricOverlay.setAnimationEnabled(true)
+                infoBottomSheet.hide()
+                binding.statusText.text = "Validating... (${getBufferSize()}/3 images)"
+                Log.d("Camera2Fragment", "State: Validating")
+            }
+            
+            is Camera2State.ValidationWarnings -> {
+                // Orange, Dashed, With animation, Bottom sheet visible
+                biometricOverlay.setColor(Color.parseColor("#FF9800")) // Orange
+                biometricOverlay.setStyle(BiometricOverlayView.OverlayStyle.DASHED)
+                biometricOverlay.setAnimationEnabled(true)
+                
+                val currentWarning = state.currentWarning
+                val warningTitle = if (state.totalWarnings > 1) {
+                    "${currentWarning.title} (${state.totalWarnings} warnings)"
+                } else {
+                    currentWarning.title
+                }
+                
+                infoBottomSheet.updateContent(
+                    warningTitle,
+                    currentWarning.description,
+                    currentWarning.imageRes
+                )
+                infoBottomSheet.show()
+                
+                val priorityStage = camera2ViewModel.getCurrentPriorityStage()
+                binding.statusText.text = "Warning: ${currentWarning.title} [Stage $priorityStage] (${getBufferSize()}/3 images)"
+                
+                Log.d("Camera2Fragment", "State: ValidationWarnings - ${currentWarning.title} [Stage $priorityStage] (${state.totalWarnings} total)")
+                Log.d("Camera2Fragment", "Warning breakdown: ${getWarningBreakdown()}")
+            }
+            
+            is Camera2State.Success -> {
+                // Green, Solid, No animation, Bottom sheet hidden
+                biometricOverlay.setColor(Color.parseColor("#4CAF50")) // Green
+                biometricOverlay.setStyle(BiometricOverlayView.OverlayStyle.SOLID)
+                biometricOverlay.setAnimationEnabled(false)
+                infoBottomSheet.hide()
+                binding.statusText.text = "Success! (${getBufferSize()}/3 images captured)"
+                Log.d("Camera2Fragment", "State: Success")
+            }
+            
+            is Camera2State.Failure -> {
+                // Red, Solid, No animation, Bottom sheet hidden
+                biometricOverlay.setColor(Color.parseColor("#F44336")) // Red
+                biometricOverlay.setStyle(BiometricOverlayView.OverlayStyle.SOLID)
+                biometricOverlay.setAnimationEnabled(false)
+                infoBottomSheet.hide()
+                binding.statusText.text = "Failure!"
+                Log.d("Camera2Fragment", "State: Failure")
+            }
         }
     }
 
@@ -257,7 +421,6 @@ class Camera2Fragment : BaseFragment() {
         }
     }
 
-
     private fun startBackgroundThread() {
         backgroundThread = HandlerThread("Camera2Background").also { it.start() }
         backgroundHandler = Handler(backgroundThread.looper)
@@ -343,7 +506,7 @@ class Camera2Fragment : BaseFragment() {
                 2
             )
             
-            imageReader?.setOnImageAvailableListener(imageAvailableListener, backgroundHandler)
+            imageReader?.setOnImageAvailableListener(imageProcessor, backgroundHandler)
 
             val outputs = listOf(
                 OutputConfiguration(surface),
@@ -412,26 +575,56 @@ class Camera2Fragment : BaseFragment() {
         }
     }
 
-    private val imageAvailableListener = ImageReader.OnImageAvailableListener { reader ->
-        val image = reader.acquireLatestImage()
-        image?.let {
-            // Process image in background thread - you can add your processing logic here
-            processFrame(it)
-            it.close()
+    /**
+     * Get current processed images from ImageProcessor
+     */
+    fun getProcessedImages() = imageProcessor.getProcessedImages()
+    
+    /**
+     * Clear processed images buffer
+     */
+    fun clearProcessedImages() {
+        imageProcessor.clearBuffer()
+    }
+    
+    /**
+     * Get current buffer size
+     */
+    fun getBufferSize() = imageProcessor.getBufferSize()
+    
+    /**
+     * Get processing statistics
+     */
+    fun getProcessingStats(): String {
+        val processedImages = getProcessedImages()
+        val bufferSize = getBufferSize()
+        
+        return if (processedImages.isNotEmpty()) {
+            val avgQuality = processedImages.map { it.qualityScore }.average()
+            "Buffer: $bufferSize/3 images | Avg Quality: ${String.format("%.2f", avgQuality)}"
+        } else {
+            "Buffer: $bufferSize/3 images | No images processed yet"
         }
     }
-
-    private fun processFrame(image: Image) {
-        // This runs in the background thread
-        // Add your frame processing logic here
-        Log.d("Camera2Fragment", "Processing frame: ${image.width}x${image.height}, format: ${image.format}")
+    
+    /**
+     * Get current processing stage
+     */
+    fun getCurrentProcessingStage() = imageProcessor.getCurrentStage()
+    
+    /**
+     * Get warnings status
+     */
+    fun getWarningsStatus() = imageProcessor.getWarningsStatus()
+    
+    /**
+     * Get detailed warning breakdown by stage
+     */
+    fun getWarningBreakdown(): String {
+        val warningsByStage = camera2ViewModel.getWarningsCountByStage()
+        val currentStage = camera2ViewModel.getCurrentPriorityStage()
         
-        // Example: Access image planes for processing
-        val planes = image.planes
-        for (i in planes.indices) {
-            val plane = planes[i]
-            Log.d("Camera2Fragment", "Plane $i: pixelStride=${plane.pixelStride}, rowStride=${plane.rowStride}")
-        }
+        return "Priority Stage: $currentStage | Stage 1: ${warningsByStage[1] ?: 0} | Stage 2: ${warningsByStage[2] ?: 0} | Stage 3: ${warningsByStage[3] ?: 0}"
     }
 
     @RequiresApi(Build.VERSION_CODES.P)

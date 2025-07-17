@@ -5,11 +5,11 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.*
 import android.util.AttributeSet
+import android.util.Log
 import android.util.TypedValue
 import android.view.View
 import android.view.animation.LinearInterpolator
 import androidx.annotation.ColorInt
-import androidx.core.content.ContextCompat
 import androidx.core.graphics.toColorInt
 
 class BiometricOverlayView @JvmOverloads constructor(
@@ -24,8 +24,8 @@ class BiometricOverlayView @JvmOverloads constructor(
 
     // --- Configuration ---
     companion object {
-        private const val RECT_HEIGHT_DP = 80f
-        private const val SEMICIRCLE_RADIUS_DP = 85f
+        private const val RECT_HEIGHT_F = 80f
+        private const val SEMICIRCLE_RADIUS_F = 85f
     }
 
     private var currentStyle = OverlayStyle.SOLID
@@ -120,8 +120,8 @@ class BiometricOverlayView @JvmOverloads constructor(
         val centerY = height / 2f
 
         // Convert DP dimensions to pixels for accurate drawing
-        val rectHalfHeightPx = dpToPx(RECT_HEIGHT_DP / 2)
-        val radiusPx = dpToPx(SEMICIRCLE_RADIUS_DP) // Radius and half-width are the same
+        val rectHalfHeightPx = dpToPx(RECT_HEIGHT_F / 2)
+        val radiusPx = dpToPx(SEMICIRCLE_RADIUS_F) // Radius and half-width are the same
 
         // Define the bounding box for the top semicircle
         val topArcRect = RectF(
@@ -176,5 +176,35 @@ class BiometricOverlayView @JvmOverloads constructor(
             dp,
             resources.displayMetrics
         )
+    }
+
+    /**
+     * Get the cutout rectangle in this view's coordinate system.
+     * This represents the bounding box of the stadium-shaped cutout.
+     */
+    fun getCutoutRect(): RectF {
+        val centerX = width / 2f
+        val centerY = height / 2f
+        
+        // Convert DP dimensions to pixels
+        val rectHalfHeightPx = dpToPx(RECT_HEIGHT_F / 2)
+        val radiusPx = dpToPx(SEMICIRCLE_RADIUS_F)
+        
+        // Return the bounding rectangle of the stadium shape
+        val rect = RectF(
+            centerX - radiusPx,
+            centerY - rectHalfHeightPx - radiusPx,
+            centerX + radiusPx,
+            centerY + rectHalfHeightPx + radiusPx
+        )
+        
+        Log.d("BiometricOverlayView", "getCutoutRect() called:")
+        Log.d("BiometricOverlayView", "  View size: ${width}x${height}")
+        Log.d("BiometricOverlayView", "  Center: ($centerX, $centerY)")
+        Log.d("BiometricOverlayView", "  rectHalfHeightPx: $rectHalfHeightPx")
+        Log.d("BiometricOverlayView", "  radiusPx: $radiusPx")
+        Log.d("BiometricOverlayView", "  Cutout rect: $rect")
+        
+        return rect
     }
 }

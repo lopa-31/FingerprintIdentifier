@@ -30,6 +30,9 @@ import com.example.fingerprint_identifier.R
 import com.example.fingerprint_identifier.databinding.FragmentCamera2Binding
 import com.example.fingerprint_identifier.ui.base.BaseFragment
 import com.example.fingerprint_identifier.analyzer.ImageProcessor
+import com.example.fingerprint_identifier.analyzer.SensorOrientationCallback
+import com.example.fingerprint_identifier.analyzer.DeviceRotationCallback
+import com.example.fingerprint_identifier.utils.CropUtils
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collectLatest
 import java.util.concurrent.Executors
@@ -97,16 +100,70 @@ class Camera2Fragment : BaseFragment() {
         biometricOverlay = binding.biometricOverlay
         infoBottomSheet = binding.infoBottomSheet
         
-        // Initialize image processor
-        imageProcessor = ImageProcessor(camera2ViewModel, viewLifecycleOwner.lifecycleScope)
-        
         cameraManager = requireContext().getSystemService(Context.CAMERA_SERVICE) as CameraManager
         setupCameraInfo()
+        
+        // Initialize image processor
+        imageProcessor = ImageProcessor(requireContext(), camera2ViewModel, viewLifecycleOwner.lifecycleScope)
+        
+        // Set UI components for cropping with callback functions
+        imageProcessor.setUIComponents(
+            overlayView = biometricOverlay,
+            textureView = binding.textureView,
+            sensorOrientationCallback = SensorOrientationCallback { getSensorOrientation() },
+            deviceRotationCallback = DeviceRotationCallback { getDeviceRotation() }
+        )
+        
         setupClickListeners()
         observeViewModel()
         
         // Set initial state
         camera2ViewModel.setInitialState()
+    }
+    
+    /**
+     * Get the current sensor orientation from camera characteristics
+     */
+    private fun getSensorOrientation(): Int {
+        return try {
+            if (::cameraCharacteristics.isInitialized) {
+                cameraCharacteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+            } else {
+                Log.w("Camera2Fragment", "Camera characteristics not initialized, returning 0")
+                0
+            }
+        } catch (e: Exception) {
+            Log.e("Camera2Fragment", "Failed to get sensor orientation", e)
+            0
+        }
+    }
+    
+    /**
+     * Get the current device rotation
+     */
+    private fun getDeviceRotation(): Int {
+        return try {
+            val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                requireContext().display
+            } else {
+                @Suppress("DEPRECATION")
+                requireActivity().windowManager.defaultDisplay
+            }
+            
+            val rotation = display?.rotation ?: Surface.ROTATION_0
+            
+            // Convert Surface rotation constants to degrees
+            when (rotation) {
+                Surface.ROTATION_0 -> 0
+                Surface.ROTATION_90 -> 90
+                Surface.ROTATION_180 -> 180
+                Surface.ROTATION_270 -> 270
+                else -> 0
+            }
+        } catch (e: Exception) {
+            Log.e("Camera2Fragment", "Failed to get device rotation", e)
+            0
+        }
     }
 
     private fun setupClickListeners() {
@@ -132,17 +189,15 @@ class Camera2Fragment : BaseFragment() {
             camera2ViewModel.setSuccessState()
         }
         
-        binding.btnFailure.setOnClickListener {
-            camera2ViewModel.setFailureState()
-        }
-        
         // Warning management buttons
         binding.btnAddWarning.setOnClickListener {
             addRandomWarning()
         }
         
         binding.btnClearWarning.setOnClickListener {
-            camera2ViewModel.clearCurrentWarning()
+            camera2ViewModel.warnings.value.firstOrNull()?.let {
+                camera2ViewModel.removeWarning(it)
+            }
         }
         
         binding.btnClearAll.setOnClickListener {
@@ -152,7 +207,9 @@ class Camera2Fragment : BaseFragment() {
         
         // Add clear buffer button functionality
         binding.btnClearWarning.setOnClickListener {
-            camera2ViewModel.clearCurrentWarning()
+            camera2ViewModel.warnings.value.firstOrNull()?.let {
+                camera2ViewModel.removeWarning(it)
+            }
             // Also clear buffer to restart process
             imageProcessor.clearBuffer()
         }
@@ -160,18 +217,15 @@ class Camera2Fragment : BaseFragment() {
     
     private fun addRandomWarning() {
         val warnings = listOf(
-            Triple("Hold Still", "Please keep your finger steady on the sensor.", R.drawable.ic_launcher_foreground),
-            Triple("Move Closer", "Please move your finger closer to the sensor.", R.drawable.ic_launcher_background),
-            Triple("Improve Lighting", "Please ensure adequate lighting for better capture.", R.drawable.ic_launcher_foreground),
-            Triple("Clean Sensor", "Please clean the sensor surface for optimal scanning.", R.drawable.ic_launcher_background),
-            Triple("Finger Position", "Please center your finger on the sensor.", R.drawable.ic_launcher_foreground),
-            Triple("Pressure Warning", "Please apply gentle pressure on the sensor.", R.drawable.ic_launcher_background),
-            Triple("Too Fast", "Please slow down your finger movement.", R.drawable.ic_launcher_foreground),
-            Triple("Wet Finger", "Please dry your finger before scanning.", R.drawable.ic_launcher_background)
+            ProcessingWarning.PoorLighting,
+            ProcessingWarning.LivenessCheckFailed,
+            ProcessingWarning.FingerNotDetected,
+            ProcessingWarning.ImageBlurry,
+            ProcessingWarning.BrightSpotsDetected
         )
         
         val randomWarning = warnings.random()
-        camera2ViewModel.addWarning(randomWarning.first, randomWarning.second, randomWarning.third)
+        camera2ViewModel.addWarning(randomWarning)
     }
     
     private fun observeViewModel() {
@@ -180,76 +234,98 @@ class Camera2Fragment : BaseFragment() {
                 updateUIForState(state)
             }
         }
+
+        viewLifecycleOwner.lifecycleScope.launch {
+            camera2ViewModel.warnings.collectLatest { warnings ->
+                updateUIForWarnings(warnings)
+            }
+        }
     }
     
     private fun updateUIForState(state: Camera2State) {
+        // Clear any persistent animations or states first
+        biometricOverlay.setAnimationEnabled(false)
+
         when (state) {
             is Camera2State.Initial -> {
-                // White, Dashed, No animation, Bottom sheet hidden
+                // White, Dashed, No animation
                 biometricOverlay.setColor(Color.WHITE)
                 biometricOverlay.setStyle(BiometricOverlayView.OverlayStyle.DASHED)
-                biometricOverlay.setAnimationEnabled(false)
-                infoBottomSheet.hide()
                 binding.statusText.text = "Camera2 Preview - Initial (${getBufferSize()}/3 images)"
                 Log.d("Camera2Fragment", "State: Initial")
             }
             
             is Camera2State.Validating -> {
-                // Amber, Dashed, With animation, Bottom sheet hidden
+                // Amber, Dashed, With animation
                 biometricOverlay.setColor(Color.parseColor("#FFC107")) // Amber
                 biometricOverlay.setStyle(BiometricOverlayView.OverlayStyle.DASHED)
                 biometricOverlay.setAnimationEnabled(true)
-                infoBottomSheet.hide()
                 binding.statusText.text = "Validating... (${getBufferSize()}/3 images)"
                 Log.d("Camera2Fragment", "State: Validating")
             }
             
-            is Camera2State.ValidationWarnings -> {
-                // Orange, Dashed, With animation, Bottom sheet visible
-                biometricOverlay.setColor(Color.parseColor("#FF9800")) // Orange
-                biometricOverlay.setStyle(BiometricOverlayView.OverlayStyle.DASHED)
-                biometricOverlay.setAnimationEnabled(true)
-                
-                val currentWarning = state.currentWarning
-                val warningTitle = if (state.totalWarnings > 1) {
-                    "${currentWarning.title} (${state.totalWarnings} warnings)"
-                } else {
-                    currentWarning.title
-                }
-                
-                infoBottomSheet.updateContent(
-                    warningTitle,
-                    currentWarning.description,
-                    currentWarning.imageRes
-                )
-                infoBottomSheet.show()
-                
-                val priorityStage = camera2ViewModel.getCurrentPriorityStage()
-                binding.statusText.text = "Warning: ${currentWarning.title} [Stage $priorityStage] (${getBufferSize()}/3 images)"
-                
-                Log.d("Camera2Fragment", "State: ValidationWarnings - ${currentWarning.title} [Stage $priorityStage] (${state.totalWarnings} total)")
-                Log.d("Camera2Fragment", "Warning breakdown: ${getWarningBreakdown()}")
-            }
-            
             is Camera2State.Success -> {
-                // Green, Solid, No animation, Bottom sheet hidden
+                // Green, Solid, No animation
                 biometricOverlay.setColor(Color.parseColor("#4CAF50")) // Green
                 biometricOverlay.setStyle(BiometricOverlayView.OverlayStyle.SOLID)
-                biometricOverlay.setAnimationEnabled(false)
-                infoBottomSheet.hide()
                 binding.statusText.text = "Success! (${getBufferSize()}/3 images captured)"
                 Log.d("Camera2Fragment", "State: Success")
             }
-            
-            is Camera2State.Failure -> {
-                // Red, Solid, No animation, Bottom sheet hidden
-                biometricOverlay.setColor(Color.parseColor("#F44336")) // Red
-                biometricOverlay.setStyle(BiometricOverlayView.OverlayStyle.SOLID)
-                biometricOverlay.setAnimationEnabled(false)
-                infoBottomSheet.hide()
-                binding.statusText.text = "Failure!"
-                Log.d("Camera2Fragment", "State: Failure")
+        }
+    }
+
+    private fun updateUIForWarnings(warnings: List<ProcessingWarning>) {
+        if (warnings.isNotEmpty()) {
+            // Get the highest-priority warning
+            val currentWarning = warnings.first()
+            val totalWarnings = warnings.size
+
+            // Orange, Dashed, with animation when warnings are present
+            biometricOverlay.setColor(Color.parseColor("#FF9800")) // Orange
+            biometricOverlay.setStyle(BiometricOverlayView.OverlayStyle.DASHED)
+            biometricOverlay.setAnimationEnabled(true)
+
+            val warningTitle = if (totalWarnings > 1) {
+                "${currentWarning.title} ($totalWarnings warnings)"
+            } else {
+                currentWarning.title
             }
+
+            infoBottomSheet.updateContent(
+                warningTitle,
+                currentWarning.description,
+                currentWarning.imageRes
+            )
+            infoBottomSheet.show()
+
+            val priorityStage = camera2ViewModel.getCurrentPriorityStage()
+            binding.statusText.text = "Warning: ${currentWarning.title} [Stage $priorityStage] (${getBufferSize()}/3 images)"
+
+            Log.d("Camera2Fragment", "Warnings present: ${currentWarning.title} [Stage $priorityStage] ($totalWarnings total)")
+            Log.d("Camera2Fragment", "Warning breakdown: ${getWarningBreakdown()}")
+        } else {
+            // No warnings, hide the bottom sheet
+            infoBottomSheet.hide()
+
+            // If the state is not 'Success', revert overlay to its base state color
+            val currentState = camera2ViewModel.camera2State.value
+            if (currentState !is Camera2State.Success) {
+                biometricOverlay.setColor(if (currentState is Camera2State.Initial) Color.WHITE else Color.parseColor("#FFC107"))
+            }
+        }
+    }
+
+    /**
+     * Calculate and update crop rectangle for image processing
+     */
+    private fun updateCropRect() {
+        // Only calculate if views are laid out and we have camera info
+        if (binding.textureView.width > 0 && binding.textureView.height > 0 && 
+            biometricOverlay.width > 0 && biometricOverlay.height > 0) {
+            
+            // We'll set the crop rect on the ImageProcessor when we have an image
+            // This is just a placeholder to ensure views are ready
+            Log.d("Camera2Fragment", "Views are ready for crop calculation")
         }
     }
 
@@ -482,9 +558,12 @@ class Camera2Fragment : BaseFragment() {
     private val surfaceTextureListener = object : TextureView.SurfaceTextureListener {
         override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
             openCamera()
+            updateCropRect()
         }
 
-        override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
+        override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
+            updateCropRect()
+        }
         override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean = true
         override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
     }

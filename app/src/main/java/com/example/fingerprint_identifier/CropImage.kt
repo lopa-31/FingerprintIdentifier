@@ -48,8 +48,8 @@ private fun Image.toBitmap(): Bitmap? {
  * @param image The Image object from the camera.
  * @param previewWidth The width of the TextureView or SurfaceView displaying the preview.
  * @param previewHeight The height of the TextureView or SurfaceView displaying the preview.
- * @param sensorRotation The rotation of the camera sensor (usually from CameraCharacteristics).
- * @param deviceRotation The current rotation of the device (from a DisplayOrientationEventListener or similar).
+ * @param sensorRotation The rotation of the camera sensor (usually from CameraCharacteristics.SENSOR_ORIENTATION).
+ * @param deviceRotation The current rotation of the device (from Display.getRotation() converted to degrees).
  * @param cropCenterX The x-coordinate of the center of the crop rectangle on the screen.
  * @param cropCenterY The y-coordinate of the center of the crop rectangle on the screen.
  * @param cropWidth The desired width of the crop rectangle on the screen.
@@ -70,67 +70,115 @@ fun cropImageFromCamera2(
     // 1. Convert the Image to a Bitmap.
     val originalBitmap = image.toBitmap() ?: return null
 
-    // 2. Create the transformation matrix.
-    val matrix = Matrix()
-
-    // --- Transformation Logic ---
-    // This is the most critical part and needs to be configured correctly.
-    // It maps the preview coordinates to the sensor's coordinates.
-
-    // 2a. Start with the sensor orientation.
-    matrix.postRotate(sensorRotation.toFloat())
-
-    // 2b. Account for the preview's scaling and translation.
-    // This assumes the preview is center-cropped inside the preview view.
-    val imageAspect = image.width.toFloat() / image.height
+    // 2. Calculate the total rotation needed
+    val totalRotation = (sensorRotation - deviceRotation + 360) % 360
+    
+    // 3. Determine effective image dimensions after accounting for rotation
+    val effectiveImageWidth: Float
+    val effectiveImageHeight: Float
+    
+    when (totalRotation) {
+        90, 270 -> {
+            effectiveImageWidth = image.height.toFloat()
+            effectiveImageHeight = image.width.toFloat()
+        }
+        else -> {
+            effectiveImageWidth = image.width.toFloat()
+            effectiveImageHeight = image.height.toFloat()
+        }
+    }
+    
+    // 4. Calculate scaling factors
+    val imageAspect = effectiveImageWidth / effectiveImageHeight
     val previewAspect = previewWidth.toFloat() / previewHeight
-
+    
     val scale: Float
     var dx = 0f
     var dy = 0f
-
+    
     if (imageAspect > previewAspect) {
         // Image is wider than the preview, so it's scaled to fit height.
-        scale = previewHeight.toFloat() / image.height
-        dx = (previewWidth - image.width * scale) / 2f
+        scale = previewHeight / effectiveImageHeight
+        dx = (previewWidth - effectiveImageWidth * scale) / 2f
     } else {
         // Image is taller than or equal to the preview, so it's scaled to fit width.
-        scale = previewWidth.toFloat() / image.width
-        dy = (previewHeight - image.height * scale) / 2f
+        scale = previewWidth / effectiveImageWidth
+        dy = (previewHeight - effectiveImageHeight * scale) / 2f
     }
-
-    matrix.postScale(scale, scale)
-    matrix.postTranslate(dx, dy)
-
-    // We need to invert the matrix to go from screen coordinates to image coordinates.
-    matrix.invert(matrix)
-
-    // 3. Define the crop rectangle in screen coordinates.
+    
+    // 5. Define the crop rectangle in screen coordinates.
     val cropRectScreen = RectF(
         cropCenterX - cropWidth / 2,
         cropCenterY - cropHeight / 2,
         cropCenterX + cropWidth / 2,
         cropCenterY + cropHeight / 2
     )
-
-    // 4. Map the screen crop rectangle to the image's coordinate space.
-    matrix.mapRect(cropRectScreen)
-
-    // 5. Create the final cropped bitmap.
-    // The createBitmap function will handle the cropping.
+    
+    // 6. Convert screen coordinates to effective image coordinates
+    val effectiveImageRect = RectF(
+        (cropRectScreen.left - dx) / scale,
+        (cropRectScreen.top - dy) / scale,
+        (cropRectScreen.right - dx) / scale,
+        (cropRectScreen.bottom - dy) / scale
+    )
+    
+    // 7. Transform coordinates based on rotation to get actual image coordinates
+    val actualImageRect = when (totalRotation) {
+        90 -> {
+            // 90 degrees clockwise: (x,y) -> (y, effectiveWidth - x)
+            RectF(
+                effectiveImageRect.top,
+                effectiveImageWidth - effectiveImageRect.right,
+                effectiveImageRect.bottom,
+                effectiveImageWidth - effectiveImageRect.left
+            )
+        }
+        180 -> {
+            // 180 degrees: (x,y) -> (effectiveWidth - x, effectiveHeight - y)
+            RectF(
+                effectiveImageWidth - effectiveImageRect.right,
+                effectiveImageHeight - effectiveImageRect.bottom,
+                effectiveImageWidth - effectiveImageRect.left,
+                effectiveImageHeight - effectiveImageRect.top
+            )
+        }
+        270 -> {
+            // 270 degrees clockwise: (x,y) -> (effectiveHeight - y, x)
+            RectF(
+                effectiveImageHeight - effectiveImageRect.bottom,
+                effectiveImageRect.left,
+                effectiveImageHeight - effectiveImageRect.top,
+                effectiveImageRect.right
+            )
+        }
+        else -> {
+            // 0 degrees or default - no transformation needed
+            effectiveImageRect
+        }
+    }
+    
+    // 8. Clamp the crop rectangle to image bounds
+    val clampedRect = android.graphics.Rect(
+        actualImageRect.left.toInt().coerceAtLeast(0),
+        actualImageRect.top.toInt().coerceAtLeast(0),
+        actualImageRect.right.toInt().coerceAtMost(originalBitmap.width),
+        actualImageRect.bottom.toInt().coerceAtMost(originalBitmap.height)
+    )
+    
+    // 9. Create the final cropped bitmap.
     val croppedBitmap = Bitmap.createBitmap(
         originalBitmap,
-        cropRectScreen.left.toInt().coerceAtLeast(0),
-        cropRectScreen.top.toInt().coerceAtLeast(0),
-        cropRectScreen.width().toInt().coerceAtMost(originalBitmap.width - cropRectScreen.left.toInt()),
-        cropRectScreen.height().toInt().coerceAtMost(originalBitmap.height - cropRectScreen.top.toInt())
+        clampedRect.left,
+        clampedRect.top,
+        clampedRect.width(),
+        clampedRect.height()
     )
-
-    // 6. Rotate the final bitmap to match the device's current orientation.
-    val totalRotation = (sensorRotation - deviceRotation + 360) % 360
-    if (totalRotation != 0) {
+    
+    // 10. Apply final rotation if needed for display orientation
+    val finalRotation = (sensorRotation - deviceRotation + 360) % 360
+    if (finalRotation != 0) {
         val rotationMatrix = Matrix()
-        rotationMatrix.postRotate(totalRotation.toFloat())
+        rotationMatrix.postRotate(finalRotation.toFloat())
         return Bitmap.createBitmap(
             croppedBitmap, 0, 0, croppedBitmap.width, croppedBitmap.height, rotationMatrix, true
         )

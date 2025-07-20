@@ -3,6 +3,7 @@ package com.example.fingerprint_identifier.ui.camera
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.ImageFormat
@@ -13,16 +14,19 @@ import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.SessionConfiguration
 import android.media.Image
 import android.media.ImageReader
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
+import android.provider.Settings
 import android.util.Log
 import android.util.Size
 import android.view.*
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
+import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.viewModels
 import androidx.lifecycle.lifecycleScope
@@ -72,15 +76,25 @@ class Camera2Fragment : BaseFragment() {
     // Image processor
     private lateinit var imageProcessor: ImageProcessor
     
+    // Permission dialog
+    private var permissionDialog: AlertDialog? = null
+    
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
+            dismissPermissionDialog()
             openCamera()
         } else {
-            Toast.makeText(context, "Camera permission denied", Toast.LENGTH_SHORT).show()
-            activity?.supportFragmentManager?.popBackStack()
+            showPermissionDeniedDialog()
         }
+    }
+    
+    private val settingsLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        // Check permission again after returning from settings
+        checkCameraPermissionAndProceed()
     }
 
     override fun onCreateView(
@@ -334,7 +348,7 @@ class Camera2Fragment : BaseFragment() {
         startBackgroundThread()
         
         if (binding.textureView.isAvailable) {
-            openCamera()
+            checkCameraPermissionAndProceed()
         } else {
             binding.textureView.surfaceTextureListener = surfaceTextureListener
         }
@@ -348,6 +362,7 @@ class Camera2Fragment : BaseFragment() {
 
     override fun onDestroyView() {
         super.onDestroyView()
+        dismissPermissionDialog()
         _binding = null
     }
 
@@ -512,12 +527,6 @@ class Camera2Fragment : BaseFragment() {
     }
 
     private fun openCamera() {
-        if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.CAMERA) 
-            != PackageManager.PERMISSION_GRANTED) {
-            requestPermissionLauncher.launch(Manifest.permission.CAMERA)
-            return
-        }
-
         try {
             cameraManager.openCamera(cameraId, stateCallback, backgroundHandler)
         } catch (e: CameraAccessException) {
@@ -557,7 +566,7 @@ class Camera2Fragment : BaseFragment() {
 
     private val surfaceTextureListener = object : TextureView.SurfaceTextureListener {
         override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
-            openCamera()
+            checkCameraPermissionAndProceed()
             updateCropRect()
         }
 
@@ -750,6 +759,60 @@ class Camera2Fragment : BaseFragment() {
         } catch (e: CameraAccessException) {
             Log.e("Camera2Fragment", "Failed to capture photo", e)
         }
+    }
+
+    private fun checkCameraPermissionAndProceed() {
+        if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.CAMERA) 
+            == PackageManager.PERMISSION_GRANTED) {
+            dismissPermissionDialog()
+            openCamera()
+        } else {
+            // Try to request permission first
+            if (shouldShowRequestPermissionRationale(Manifest.permission.CAMERA)) {
+                // Show explanation dialog and then request permission
+                showPermissionRequestDialog()
+            } else {
+                // Request permission directly
+                requestPermissionLauncher.launch(Manifest.permission.CAMERA)
+            }
+        }
+    }
+    
+    private fun showPermissionRequestDialog() {
+        permissionDialog = AlertDialog.Builder(requireContext())
+            .setTitle("Camera Permission Required")
+            .setMessage("This app needs camera access to capture fingerprint images. Please grant camera permission to continue.")
+            .setPositiveButton("Grant Permission") { _, _ ->
+                requestPermissionLauncher.launch(Manifest.permission.CAMERA)
+            }
+            .setNegativeButton("Exit") { _, _ ->
+                activity?.supportFragmentManager?.popBackStack()
+            }
+            .setCancelable(false)
+            .create()
+        permissionDialog?.show()
+    }
+    
+    private fun showPermissionDeniedDialog() {
+        permissionDialog = AlertDialog.Builder(requireContext())
+            .setTitle("Camera Permission Required")
+            .setMessage("Camera permission is required to use this feature. Please enable it in app settings to continue.")
+            .setPositiveButton("Open Settings") { _, _ ->
+                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                intent.data = Uri.fromParts("package", requireContext().packageName, null)
+                settingsLauncher.launch(intent)
+            }
+            .setNegativeButton("Try Again") { _, _ ->
+                requestPermissionLauncher.launch(Manifest.permission.CAMERA)
+            }
+            .setCancelable(false)
+            .create()
+        permissionDialog?.show()
+    }
+    
+    private fun dismissPermissionDialog() {
+        permissionDialog?.dismiss()
+        permissionDialog = null
     }
 
     companion object {

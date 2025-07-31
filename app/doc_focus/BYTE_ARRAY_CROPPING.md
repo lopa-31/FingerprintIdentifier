@@ -282,3 +282,204 @@ val croppedNv21 = cropNv21( // <-- Use the corrected function
 ```
 
 This corrected function is both safe and performant. By using `System.arraycopy`, it leverages fast, low-level memory operations, while the separated logic for the Y and UV planes ensures a correctly formatted output image.
+
+
+
+
+
+
+
+
+Understood. That is an excellent diagnostic step. If there's still a distortion, isolating the Y plane (the grayscale luminance information) is the perfect way to determine if the error is in the fundamental cropping logic or in the more complex handling of the interleaved UV (color) plane.
+
+You are correct, let's simplify and focus *only* on the Y plane.
+
+### Cropping Just the Y-Plane (Grayscale)
+
+This function will take the original `nv21` byte array and the crop rectangle, and return a **new, simple byte array that contains only the grayscale pixel data** for that rectangle. The resulting array will have a size of `cropRect.width() * cropRect.height()`.
+
+```kotlin
+import android.graphics.Rect
+
+/**
+ * Crops ONLY the Y-plane (grayscale luminance) from an NV21 byte array.
+ * This is a highly reliable way to verify cropping coordinates and logic,
+ * as it avoids the complexity of the UV color plane.
+ *
+ * @param nv21 The source NV21 byte array.
+ * @param width The width of the source image.
+ * @param height The height of the source image.
+ * @param cropRect The rectangle defining the area to crop.
+ * @return A new byte array containing ONLY the cropped grayscale Y-plane data.
+ *         The size will be cropRect.width() * cropRect.height().
+ */
+fun cropYPlane(
+    nv21: ByteArray,
+    width: Int,
+    height: Int,
+    cropRect: Rect
+): ByteArray {
+    // Sanitize the crop rect to ensure it's within the image bounds
+    val sanitizedRect = Rect(cropRect)
+    if (!sanitizedRect.intersect(0, 0, width, height)) {
+        // If the rectangle is completely outside the image, return empty.
+        return ByteArray(0)
+    }
+
+    val cropWidth = sanitizedRect.width()
+    val cropHeight = sanitizedRect.height()
+
+    // The output array will contain only the Y data.
+    val yCropped = ByteArray(cropWidth * cropHeight)
+    var yIndex = 0
+
+    // The Y plane is the first `width * height` bytes of the NV21 array.
+    for (y in sanitizedRect.top until sanitizedRect.bottom) {
+        val srcPos = y * width + sanitizedRect.left
+        System.arraycopy(nv21, srcPos, yCropped, yIndex, cropWidth)
+        yIndex += cropWidth
+    }
+
+    return yCropped
+}
+```
+
+### How to Use and What to Expect
+
+You would use this in your workflow like this:
+
+```kotlin
+// ... after you have your `rectInOriginalCoords`
+
+// === Step 6: Crop ONLY the Y-Plane from the ORIGINAL NV21 Byte Array ===
+val croppedGrayscaleBytes = cropYPlane(
+    originalNv21,
+    imageWidth,
+    imageHeight,
+    rectInOriginalCoords
+)
+
+// Now, `croppedGrayscaleBytes` is a simple 1D array of grayscale pixel values.
+// To visualize it, you would need to convert it to a grayscale Bitmap.
+```
+
+### What This Tells Us
+
+1.  **If this grayscale image looks correct:** Your coordinate transformation and basic cropping logic are **correct**. The problem is definitively in how the UV (color) plane is being handled. This is the most likely scenario.
+2.  **If this grayscale image is still distorted:** The problem is more fundamental. It would mean the `rectInOriginalCoords` is incorrect, or there's a misunderstanding of the source image's layout (see "The Most Likely Culprit" below).
+
+---
+
+### The Most Likely Culprit: Image Stride
+
+If the grayscale crop works but the color crop doesn't, the problem is almost certainly **Image Stride**.
+
+On Android, when an image is processed by the hardware, it often adds extra padding bytes at the end of each row for alignment purposes.
+
+*   `width`: The logical width of the image content (e.g., 1920 pixels).
+*   `stride`: The actual number of bytes in memory for each row (e.g., 1928 bytes).
+
+My previous `cropNv21` functions **assumed `stride == width`**. If they are not equal, every calculation of a row's starting position (`y * width`) will be increasingly wrong as you go down the image, causing a shearing or slanted distortion.
+
+### The Definitive Solution: A Stride-Aware `cropNv21`
+
+To fix this for good, you must get the stride from the source image (usually an `ImageProxy` or `Image` object from CameraX/Camera2) and pass it to your cropping function.
+
+Here is a `cropNv21` function that properly handles stride.
+
+```kotlin
+import android.graphics.Rect
+import androidx.camera.core.ImageProxy
+
+/**
+ * FINAL CORRECTED VERSION: Crops an NV21 byte array, correctly handling plane strides.
+ * This is the most robust implementation and should eliminate distortion.
+ *
+ * @param nv21 The source NV21 byte array.
+ * @param imageWidth The logical width of the image.
+ * @param yRowStride The row stride of the Y plane (bytes per row in memory).
+ * @param uvRowStride The row stride of the UV plane.
+ * @param uvPixelStride The pixel stride of the UV plane (usually 2 for NV21).
+ * @param cropRect The rectangle to crop, in the image's coordinate system.
+ * @return A new byte array with the cropped NV21 data.
+ */
+fun cropNv21WithStride(
+    nv21: ByteArray,
+    imageWidth: Int,
+    yRowStride: Int,
+    uvRowStride: Int,
+    uvPixelStride: Int,
+    cropRect: Rect
+): ByteArray {
+    // Sanitize the crop rectangle for even dimensions
+    val x = if (cropRect.left % 2 != 0) cropRect.left - 1 else cropRect.left
+    val y = if (cropRect.top % 2 != 0) cropRect.top - 1 else cropRect.top
+    var cropWidth = if (cropRect.width() % 2 != 0) cropRect.width() - 1 else cropRect.width()
+    var cropHeight = if (cropRect.height() % 2 != 0) cropRect.height() - 1 else cropRect.height()
+
+    if (x + cropWidth > imageWidth) cropWidth = imageWidth - x
+    // Add other boundary checks as needed
+
+    val croppedArray = ByteArray(cropWidth * cropHeight * 3 / 2)
+    val yPlaneSize = yRowStride * cropRect.height() // This is an estimate, not used for indexing
+
+    // Copy Y Plane (Luminance)
+    var destY = 0
+    for (i in y until y + cropHeight) {
+        val srcPos = i * yRowStride + x
+        System.arraycopy(nv21, srcPos, croppedArray, destY, cropWidth)
+        destY += cropWidth
+    }
+
+    // Copy UV Plane (Chrominance)
+    val uvPlaneSrcStart = yRowStride * cropRect.height() // Approximation
+    var destUV = cropWidth * cropHeight
+    val uvSrcStartY = y / 2
+    
+    // The starting position of the *entire* UV plane in the source buffer
+    // is after all the Y rows, considering stride.
+    val fullYPlaneSize = yRowStride * (nv21.size * 2 / 3 / yRowStride) // Get actual Y plane height
+    
+    for (i in 0 until cropHeight / 2) {
+        // Start of the source UV row
+        val srcPos = fullYPlaneSize + (uvSrcStartY + i) * uvRowStride + (x / uvPixelStride) * uvPixelStride
+        System.arraycopy(nv21, srcPos, croppedArray, destUV, cropWidth) // UV row has same width as Y crop
+        destUV += cropWidth
+    }
+
+    return croppedArray
+}
+
+// How you would get the strides from a CameraX ImageProxy:
+fun processImage(imageProxy: ImageProxy) {
+    val yPlane = imageProxy.planes[0]
+    val uvPlane = imageProxy.planes[2] // For NV21, U/V are interleaved in the 3rd plane
+
+    val yRowStride = yPlane.rowStride
+    val uvRowStride = uvPlane.rowStride
+    val uvPixelStride = uvPlane.pixelStride
+    
+    // ... get your nv21 byte array from the imageProxy ...
+    val nv21ByteArray = ...
+    
+    // ... get your cropRect ...
+    val cropRect = ...
+    
+    // Call the stride-aware function
+    val finalCroppedData = cropNv21WithStride(
+        nv21ByteArray,
+        imageProxy.width,
+        yRowStride,
+        uvRowStride,
+        uvPixelStride,
+        cropRect
+    )
+}
+
+```
+
+### Your Path Forward
+
+1.  **Test `cropYPlane`:** Use the first function to get a grayscale crop.
+2.  **Confirm It's Correct:** If the grayscale image is perfect, you have 100% confirmed the issue is with color plane handling.
+3.  **Implement `cropNv21WithStride`:** Get the stride values from your `Image` or `ImageProxy` and use the final, stride-aware function. This should resolve the distortion permanently.

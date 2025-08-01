@@ -1,265 +1,245 @@
-Excellent idea! That's a very standard and user-friendly workflow. Adding a confirmation screen with the captured image gives the user confidence in the result and clear options for what to do next.
+Excellent, you're working on a fascinating and challenging application! Here's a detailed breakdown and the code to implement the desired success state flow in your `CameraFragment`.
 
-Here is the code and step-by-step guide to implement this functionality.
+### Conceptual Flow
 
-### Step 1: Update Your Layout (`fragment_camera.xml`)
+1.  **Image Transfer**: When your `ImageProcessor` determines a successful capture, it needs to pass the captured image (as a `Bitmap`) to the `CameraFragment`. The most robust way to do this within your existing architecture is to use the `CameraViewModel`.
 
-First, we need to add the UI elements for the success screen. We'll add an `ImageView` to show the captured fingerprint and two `Button`s for "Recapture" and "Confirm". We will wrap them in a `ConstraintLayout` and set its initial visibility to `gone`.
+2.  **UI State Update**: The `CameraFragment` will observe this image data from the `CameraViewModel`. Upon receiving a non-null image, it will:
+    *   Stop the camera preview.
+    *   Hide the `viewFinder` (the `SurfaceView` displaying the camera feed).
+    *   Show an `ImageView` to display the captured fingerprint image.
+    *   Make "Retake" and "Confirm" buttons visible.
 
-Add this `ConstraintLayout` inside the root layout of your `fragment_camera.xml`, after the `viewFinder` and other overlays.
+3.  **User Action**:
+    *   **Retake**: Clicking "Retake" will hide the `ImageView` and buttons, show the `viewFinder` again, and re-initialize the camera to start the capture process from the beginning.
+    *   **Go Back**: This can be a simple back action, taking the user to the previous screen in your application's navigation stack.
 
-```xml
-<!-- Add this block to your fragment_camera.xml -->
-<androidx.constraintlayout.widget.ConstraintLayout
-    android:id="@+id/success_layout"
-    android:layout_width="0dp"
-    android:layout_height="0dp"
-    android:background="#B3000000"
-    android:visibility="gone"
-    app:layout_constraintBottom_toBottomOf="parent"
-    app:layout_constraintEnd_toEndOf="parent"
-    app:layout_constraintStart_toStartOf="parent"
-    app:layout_constraintTop_toTopOf="parent">
+Here is the modified code to achieve this flow:
 
-    <ImageView
-        android:id="@+id/image_view_captured"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_margin="32dp"
-        android:contentDescription="@string/captured_fingerprint_image"
-        android:scaleType="fitCenter"
-        app:layout_constraintBottom_toTopOf="@id/button_recapture"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent"
-        tools:src="@tools:sample/avatars" />
+### 1. Update `CameraViewModel`
 
-    <Button
-        android:id="@+id/button_recapture"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="16dp"
-        android:layout_marginEnd="8dp"
-        android:layout_marginBottom="16dp"
-        android:text="@string/recapture"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toStartOf="@+id/button_confirm"
-        app:layout_constraintStart_toStartOf="parent" />
-
-    <Button
-        android:id="@+id/button_confirm"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="8dp"
-        android:layout_marginEnd="16dp"
-        android:layout_marginBottom="16dp"
-        android:text="@string/confirm"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toEndOf="@id/button_recapture" />
-
-</androidx.constraintlayout.widget.ConstraintLayout>```
-*(You'll need to add the `@string` resources for `captured_fingerprint_image`, `recapture`, and `confirm` in your `strings.xml` file.)*
-
-### Step 2: Modify `CameraFragment.kt`
-
-Now, let's add the logic to control the new UI, pause the preview, and handle the button clicks.
+First, let's add a `StateFlow` to your `CameraViewModel` to hold the successfully captured image.
 
 ```kotlin
-// ... other imports
-import android.widget.Button
-import android.widget.ImageView
-import androidx.constraintlayout.widget.ConstraintLayout
-import androidx.core.view.isInvisible
-// ...
+// In CameraViewModel.kt
+
+private val _capturedImage = MutableStateFlow<Bitmap?>(null)
+val capturedImage: StateFlow<Bitmap?> = _capturedImage.asStateFlow()
+
+fun onImageCaptured(bitmap: Bitmap) {
+    _capturedImage.value = bitmap
+}
+
+fun clearCapturedImage() {
+    _capturedImage.value = null
+}
+```
+
+### 2. Modify `ImageProcessor`
+
+Now, when your `ImageProcessor` has the final, valid image, it will call the `onImageCaptured` function in the `ViewModel`.
+
+```kotlin
+// Inside your ImageProcessor class, where you have the successful bitmap
+// For example, in the success condition:
+
+// ... inside a coroutine scope
+val successfulBitmap: Bitmap = // ... your processed bitmap
+cameraViewModel.onImageCaptured(successfulBitmap)
+```
+
+### 3. Update `fragment_camera.xml`
+
+You need to add an `ImageView` and the buttons to your layout. We'll make them initially invisible.
+
+```xml
+<!-- In res/layout/fragment_camera.xml -->
+<androidx.constraintlayout.widget.ConstraintLayout ...>
+
+    <!-- Your existing viewFinder -->
+    <in.gov.uidai.capture.ui.camera.view.AutoFitSurfaceView
+        android:id="@+id/view_finder"
+        ... />
+
+    <!-- Your existing overlays -->
+    <in.gov.uidai.capture.ui.camera.view.BiometricOverlayView
+        android:id="@+id/biometric_overlay_view_top"
+        ... />
+
+    <!-- Add an ImageView to display the captured image -->
+    <ImageView
+        android:id="@+id/captured_image_view"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:visibility="gone"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:scaleType="fitCenter"
+        android:contentDescription="@string/captured_fingerprint_image" />
+
+    <!-- Add a container for the buttons -->
+    <LinearLayout
+        android:id="@+id/success_controls_container"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:padding="16dp"
+        android:gravity="center">
+
+        <Button
+            android:id="@+id/retake_button"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/retake"
+            android:layout_marginEnd="16dp"/>
+
+        <Button
+            android:id="@+id/go_back_button"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/go_back"/>
+    </LinearLayout>
+
+    <!-- Your other UI elements like the bottom sheet -->
+
+</androidx.constraintlayout.widget.ConstraintLayout>
+```
+
+### 4. Update `CameraFragment`
+
+Finally, let's orchestrate the logic in your `CameraFragment`.
+
+```kotlin
+// In CameraFragment.kt
+
+// ... imports
 
 @AndroidEntryPoint
 class CameraFragment : Fragment() {
 
-    // ... (keep all your existing properties)
-
-    // --- Add references for the new UI elements ---
-    private lateinit var successLayout: ConstraintLayout
-    private lateinit var capturedImageView: ImageView
-    private lateinit var recaptureButton: Button
-    private lateinit var confirmButton: Button
-
+    // ... (your existing properties)
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        
-        // --- Initialize your new UI elements ---
-        successLayout = fragmentCameraBinding.successLayout
-        capturedImageView = fragmentCameraBinding.imageViewCaptured
-        recaptureButton = fragmentCameraBinding.buttonRecapture
-        confirmButton = fragmentCameraBinding.buttonConfirm
 
-        // ... (rest of your existing onViewCreated code)
+        // ... (your existing onViewCreated logic)
 
-        setupClickListeners() // Call the new method to set up button clicks
-    }
-    
-    // --- New method to set up click listeners ---
-    private fun setupClickListeners() {
-        recaptureButton.setOnClickListener {
-            // Hide the success screen
-            successLayout.visibility = View.GONE
-            
-            // Clear the buffer and reset the processing state
-            cameraViewModel.clearProcessingState() // We'll add this to the ViewModel
-            
-            // Resume the camera preview
-            resumePreview()
-        }
+        // Set up button listeners
+        setupButtonClickListeners()
 
-        confirmButton.setOnClickListener {
-            // Handle the confirmation action, e.g., navigate back with the result
-            Toast.makeText(requireContext(), "Fingerprint Confirmed!", Toast.LENGTH_SHORT).show()
-            activity?.supportFragmentManager?.popBackStack()
-        }
+        // ... (the rest of your onViewCreated logic)
     }
 
-    // --- Method to pause the camera preview ---
-    private fun pausePreview() {
-        try {
-            captureSession.stopRepeating()
-            Log.d(TAG, "Camera preview paused.")
-        } catch (e: CameraAccessException) {
-            Log.e(TAG, "Failed to pause camera preview.", e)
-        }
-    }
+    private fun observeViewModel() {
+        // ... (your existing UIState and WarningState observers)
 
-    // --- Method to resume the camera preview ---
-    private fun resumePreview() {
-        try {
-            // Use the same repeating request builder you configured earlier
-            captureSession.setRepeatingRequest(
-                captureRequestBuilder.build(),
-                null,
-                cameraPreviewHandler
-            )
-            Log.d(TAG, "Camera preview resumed.")
-        } catch (e: CameraAccessException) {
-            Log.e(TAG, "Failed to resume camera preview.", e)
-        }
-    }
-
-    // --- Update your UI state handling logic ---
-    private fun updateUIForState(state: UIState) {
-        val biometricOverlay = fragmentCameraBinding.biometricOverlayViewTop
-        
-        // Hide success layout by default unless in SUCCESS state
-        if (state != UIState.SUCCESS) {
-            successLayout.visibility = View.GONE
-        }
-        
-        when (state) {
-            UIState.INITIAL -> {
-                // ... (your existing code)
-            }
-
-            UIState.VALIDATION -> {
-                // ... (your existing code)
-            }
-
-            UIState.SUCCESS -> {
-                // Green, Solid, No animation
-                biometricOverlay.setColor(Color.GREEN)
-                biometricOverlay.setStyle(BiometricOverlayView.OverlayStyle.SOLID)
-                biometricOverlay.setAnimationEnabled(false)
-                fragmentCameraBinding.biometricOverlayHeading.text =
-                    getString(`in`.gov.uidai.capture.R.string.heading_success_state)
-                Log.d(TAG, "State: Success")
-
-                // --- NEW LOGIC FOR SUCCESS STATE ---
-                // 1. Pause the camera preview to freeze the screen
-                pausePreview()
-
-                // 2. Get the best image from the processor's buffer
-                val bestImage = cameraViewModel.getProcessedImages().firstOrNull()
-                bestImage?.finalBitmap?.let {
-                    capturedImageView.setImageBitmap(it)
+        // Add an observer for the captured image
+        viewLifecycleOwner.lifecycleScope.launch {
+            cameraViewModel.capturedImage.collectLatest { bitmap ->
+                if (bitmap != null) {
+                    showSuccessCapture(bitmap)
                 }
-
-                // 3. Show the success layout
-                successLayout.visibility = View.VISIBLE
             }
         }
     }
 
-    // ... (rest of your CameraFragment code)
+    private fun showSuccessCapture(bitmap: Bitmap) {
+        // Stop the camera
+        closeCamera()
+
+        // Update UI
+        fragmentCameraBinding.viewFinder.isVisible = false
+        fragmentCameraBinding.biometricOverlayViewTop.isVisible = false
+        fragmentCameraBinding.biometricOverlayHeading.isVisible = false
+        fragmentCameraBinding.capturedImageView.apply {
+            isVisible = true
+            setImageBitmap(bitmap)
+        }
+        fragmentCameraBinding.successControlsContainer.isVisible = true
+    }
+
+
+    private fun setupButtonClickListeners() {
+        fragmentCameraBinding.retakeButton.setOnClickListener {
+            retakeCapture()
+        }
+
+        fragmentCameraBinding.goBackButton.setOnClickListener {
+            // This will navigate back in the navigation stack
+            requireActivity().onBackPressedDispatcher.onBackPressed()
+        }
+    }
+
+    private fun retakeCapture() {
+        // Reset the UI to its initial capture state
+        fragmentCameraBinding.capturedImageView.isVisible = false
+        fragmentCameraBinding.successControlsContainer.isVisible = false
+        fragmentCameraBinding.viewFinder.isVisible = true
+        fragmentCameraBinding.biometricOverlayViewTop.isVisible = true
+        fragmentCameraBinding.biometricOverlayHeading.isVisible = true
+
+
+        // Clear the captured image from the ViewModel to prevent re-triggering the success UI
+        cameraViewModel.clearCapturedImage()
+
+        // Reset the UI state manager
+        cameraViewModel.uiStateManager.resetToInitial()
+
+        // Re-initialize the camera
+        // It's important that initializeCamera() can be called again safely.
+        initializeCamera()
+    }
+
+    // You might need to add a reset function to your UIStateManager
+    // In UIStateManager class:
+    // fun resetToInitial() {
+    //     _uiState.value = UIState.INITIAL
+    // }
+
+
+    private fun closeCamera() {
+        try {
+            if (::captureSession.isInitialized) captureSession.close()
+            if (::cameraDevice.isInitialized) cameraDevice.close()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error closing camera", e)
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // It's good practice to close the camera when the fragment is paused
+        closeCamera()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // If the view is visible and we don't have a captured image, start the camera
+        if (fragmentCameraBinding.viewFinder.isVisible && cameraViewModel.capturedImage.value == null) {
+            // You might need to re-initialize your threads if you stop them in onPause
+            if (!cameraPreviewThread.isAlive) cameraPreviewThread.start()
+            if (!imageReaderThread.isAlive) imageReaderThread.start()
+            initializeCamera()
+        }
+    }
+
+
+    override fun onDestroyView() {
+        super.onDestroyView()
+        _fragmentCameraBinding = null
+        // Stop the threads
+        cameraPreviewThread.quitSafely()
+        imageReaderThread.quitSafely()
+    }
+
+    // ... (rest of your existing CameraFragment code)
 }
 ```
 
-### Step 3: Update `CameraViewModel.kt`
-
-We need a way for the Fragment to easily tell the `ImageProcessor` to clear its buffer and reset the state. The ViewModel is the perfect place for this.
-
-```kotlin
-// In your CameraViewModel.kt
-
-// ... (other viewmodel code)
-
-// Assume you have a reference to your ImageProcessor instance accessible here
-// If not, you'll need to pass it to the ViewModel or have a shared instance.
-// For this example, let's assume you pass it during initialization.
-// A cleaner way would be to inject it with Hilt.
-
-// Let's create a placeholder for the processor
-// You should replace this with your actual processor instance.
-private lateinit var imageProcessor: ImageProcessor
-
-fun setImageProcessor(processor: ImageProcessor) {
-    this.imageProcessor = processor
-}
-
-
-// Method to get the final images
-fun getProcessedImages(): List<ProcessedImage> {
-    // Delegate the call to the image processor
-    return imageProcessor.getProcessedImages()
-}
-
-// Method to clear the state, called on "Recapture"
-fun clearProcessingState() {
-    // Delegate the call to the image processor
-    imageProcessor.clearBuffer()
-}
-
-// ... (rest of your viewmodel code)
-```
-
-**Finally, connect this in `CameraFragment`:**
-
-In `CameraFragment.kt`'s `onViewCreated`, after you initialize your `imageProcessor`, make sure the `ViewModel` has a reference to it.
-
-```kotlin
-// In CameraFragment.kt -> onViewCreated()
-val imageProcessor = ImageProcessor(
-    cameraViewModel,
-    lifecycleScope,
-    tfLiteInterpreter
-).apply {
-    // ... your existing setup
-}
-
-// Give the ViewModel a reference to the processor
-cameraViewModel.setImageProcessor(imageProcessor)
-
-imageReader.setOnImageAvailableListener(
-    imageProcessor, imageReaderHandler
-)
-```
-
-### Summary of Changes
-
-1.  **UI:** A new layout (`success_layout`) is added, containing an `ImageView` and two `Button`s. It's hidden by default.
-2.  **State Change (`UIState.SUCCESS`):**
-    *   The `updateUIForState` function now handles the `SUCCESS` case.
-    *   It calls `pausePreview()` to stop the camera feed.
-    *   It fetches the best image from the `ImageProcessor` (via the `ViewModel`) and displays it in the `ImageView`.
-    *   It makes the `success_layout` visible.
-3.  **User Actions:**
-    *   The **"Recapture"** button calls `clearProcessingState()` on the `ViewModel`, which tells the `ImageProcessor` to clear its buffer and reset the UI state back to `INITIAL`. It then calls `resumePreview()` to restart the camera.
-    *   The **"Confirm"** button can now be used to finalize the process and navigate away.
-4.  **Camera Control:** New `pausePreview()` and `resumePreview()` methods give you direct control over the camera's repeating request, allowing you to freeze and unfreeze the live feed efficiently.
+This implementation provides a clean separation of concerns, where the `ImageProcessor` is responsible for deciding on a successful capture, the `ViewModel` acts as a state holder for the captured image, and the `Fragment` is responsible for reacting to that state change and updating the UI accordingly.
